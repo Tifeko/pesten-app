@@ -1,2 +1,2 @@
 # pesten-app
-pesten-apo
+pesten-app
