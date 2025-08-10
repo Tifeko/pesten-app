@@ -1,29 +1,3 @@
-"""
-Pesten Score Tracker - BeeWare (Toga) app met MariaDB integratie en spelbeheer
-
-Gebruik:
-1. Installeer dependencies:
-   pip install toga mysql-connector-python
-2. Start je MariaDB-container:
-   docker run --name mariadb -e MARIADB_ROOT_PASSWORD=rootpass -e MARIADB_DATABASE=pesten -p 3306:3306 -d mariadb:latest
-3. Maak de tabellen aan:
-   docker exec -it mariadb mariadb -u root -p pesten
-   CREATE TABLE scores (
-       id INT AUTO_INCREMENT PRIMARY KEY,
-       speler VARCHAR(255),
-       wins INT DEFAULT 0
-   );
-   CREATE TABLE games (
-       id INT AUTO_INCREMENT PRIMARY KEY,
-       starttijd DATETIME DEFAULT CURRENT_TIMESTAMP
-   );
-   CREATE TABLE game_players (
-       game_id INT,
-       speler VARCHAR(255)
-   );
-4. Run: python pesten_app.py
-"""
-
 import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
@@ -43,19 +17,19 @@ class PestenApp(toga.App):
         self.conn = None
         self.cursor = None
         self.current_game_id = None
+        self.selected_players = []
 
     def startup(self):
         self._connect_db()
 
         self.main_window = toga.MainWindow(title=self.formal_name)
 
-        self.speler_input = toga.TextInput(placeholder='Naam van speler', style=Pack(padding=5))
         show_scores_button = toga.Button('Toon scores', on_press=self.show_scores, style=Pack(padding=5))
         new_game_button = toga.Button('Nieuw spel', on_press=self.start_new_game, style=Pack(padding=5))
 
         self.scores_label = toga.Label('Scores komen hier...', style=Pack(padding=10))
 
-        button_box = toga.Box(children=[self.speler_input, show_scores_button, new_game_button], style=Pack(direction=ROW, padding=5))
+        button_box = toga.Box(children=[show_scores_button, new_game_button], style=Pack(direction=ROW, padding=5))
         main_box = toga.Box(children=[button_box, self.scores_label], style=Pack(direction=COLUMN, padding=10))
 
         self.main_window.content = main_box
@@ -65,18 +39,77 @@ class PestenApp(toga.App):
         self.conn = mysql.connector.connect(**DB_CONFIG)
         self.cursor = self.conn.cursor()
 
+    def on_window_close(self, window):
+        print(f"Window '{window.title}' wordt gesloten via kruisje!")
+        if window in self.windows:
+            self.windows.remove(window)
+        window.close()
+        return True  # Sta toe dat window sluit
+
     def start_new_game(self, widget):
+        self.cursor.execute("SELECT speler FROM scores")
+        spelers = [row[0] for row in self.cursor.fetchall()]
+
+        if not spelers:
+            self.main_window.info_dialog('Geen spelers', 'Er zijn nog geen spelers in de database.')
+            return
+
+        select_box = toga.Box(style=Pack(direction=COLUMN, padding=10))
+        self.checkboxes = []
+        for speler in spelers:
+            cb = toga.Switch(text=speler)
+            cb.value = False
+            self.checkboxes.append(cb)
+            select_box.add(cb)
+
+        button_row = toga.Box(style=Pack(direction=ROW, padding=5))
+        start_button = toga.Button('Bevestig spelers', on_press=self.confirm_players, style=Pack(padding=5))
+        close_button = toga.Button('Annuleer', on_press=lambda w: self.close_window(select_window), style=Pack(padding=5))
+        button_row.add(start_button)
+        button_row.add(close_button)
+
+        select_box.add(button_row)
+
+        select_window = toga.Window(title='Selecteer spelers')
+        select_window.content = select_box
+        select_window.on_close = self.on_window_close  # Directe verwijzing, geen lambda!
+
+        self.windows.add(select_window)
+        select_window.show()
+        self.select_window = select_window
+
+    def close_window(self, window):
+        if window in self.windows:
+            self.windows.remove(window)
+        window.close()
+
+    def confirm_players(self, widget):
+        self.selected_players = [cb.text for cb in self.checkboxes if cb.value]
+        if not self.selected_players:
+            self.main_window.info_dialog('Geen selectie', 'Selecteer minstens één speler.')
+            return
+
+        self.close_window(self.select_window)
+
         self.cursor.execute("INSERT INTO games () VALUES ()")
         self.conn.commit()
         self.current_game_id = self.cursor.lastrowid
-        self.main_window.info_dialog('Nieuw spel', f'Nieuw spel gestart met ID {self.current_game_id}. Voeg nu spelers toe.')
 
-        spelers_str = self.main_window.question_dialog('Spelers toevoegen', 'Voer de spelers in, gescheiden door komma')
-        if spelers_str:
-            spelers = [s.strip() for s in spelers_str.split(',') if s.strip()]
-            for speler in spelers:
-                self.cursor.execute("INSERT INTO game_players (game_id, speler) VALUES (%s, %s)", (self.current_game_id, speler))
-            self.conn.commit()
+        knop_box = toga.Box(style=Pack(direction=COLUMN, padding=10))
+        for speler in self.selected_players:
+            knop_box.add(toga.Button(speler, on_press=lambda w, s=speler: self.set_winner(s), style=Pack(padding=5)))
+
+        win_window = toga.Window(title='Kies winnaar')
+        win_window.content = knop_box
+        win_window.on_close = self.on_window_close  # Ook hier
+
+        self.windows.add(win_window)
+        win_window.show()
+
+    def set_winner(self, speler):
+        self.cursor.execute("UPDATE scores SET wins = wins + 1 WHERE speler = %s", (speler,))
+        self.conn.commit()
+        self.show_scores(None)
 
     def show_scores(self, widget):
         self.cursor.execute("SELECT speler, wins FROM scores ORDER BY wins DESC")

@@ -1,3 +1,4 @@
 # https://toga.readthedocs.io/en/stable/tutorial/tutorial-0.html
 toga
 mysql-connector-python
+briefcase
