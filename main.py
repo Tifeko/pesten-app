@@ -5,6 +5,7 @@ from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 import mysql.connector
 from mysql.connector import Error
+import csv
 
 CONFIG_FILENAME = "db_config.json"
 
@@ -129,10 +130,11 @@ class PestenApp(toga.App):
     def load_main_menu(self):
         show_scores_button = toga.Button('Toon scores', on_press=self.show_scores, style=Pack(padding=5))
         new_game_button = toga.Button('Nieuw spel', on_press=self.start_new_game, style=Pack(padding=5))
+        export_csv_button = toga.Button('Exporteer spellen (CSV)', on_press=self.export_games_csv, style=Pack(padding=5))
 
         self.scores_label = toga.Label('Scores komen hier...', style=Pack(padding=10))
 
-        button_box = toga.Box(children=[show_scores_button, new_game_button], style=Pack(direction=ROW, padding=5))
+        button_box = toga.Box(children=[show_scores_button, new_game_button, export_csv_button], style=Pack(direction=ROW, padding=5))
         main_box = toga.Box(children=[button_box, self.scores_label], style=Pack(direction=COLUMN, padding=10))
 
         self.main_window.content = main_box
@@ -241,6 +243,40 @@ class PestenApp(toga.App):
         else:
             score_text = 'Nog geen scores.'
         self.scores_label.text = score_text
+
+    async def export_games_csv(self, widget):
+        if not self.cursor:
+            self.main_window.info_dialog('Fout', 'Geen databaseverbinding.')
+            return
+
+        self.cursor.execute("SELECT id, spelers, winnaar FROM games ORDER BY id")
+        rows = self.cursor.fetchall()
+
+        if not rows:
+            self.main_window.info_dialog('Info', 'Er zijn geen gespeelde spellen om te exporteren.')
+            return
+
+        file_path = await self.main_window.save_file_dialog(
+            title='Sla spellen op als CSV',
+            suggested_filename='spellen.csv',
+            file_types=['csv']
+        )
+
+        if not file_path:
+            return  # gebruiker annuleerde
+
+        # Zorg dat we absoluut pad gebruiken
+        file_path = os.path.abspath(file_path)
+
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['Spel ID', 'Spelers', 'Winnaar'])
+                for spel_id, spelers, winnaar in rows:
+                    writer.writerow([spel_id, spelers, winnaar if winnaar else ''])
+            self.main_window.info_dialog('Succes', f'Spellen succesvol opgeslagen in {file_path}')
+        except Exception as e:
+            self.main_window.info_dialog('Fout', f'Kon CSV niet opslaan:\n{e}')
 
     def on_window_close(self, window):
         if window in self.open_windows:
