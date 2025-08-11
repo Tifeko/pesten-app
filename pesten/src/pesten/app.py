@@ -63,6 +63,16 @@ class PestenApp(toga.App):
         try:
             self.conn = pymysql.connect(**self.db_config)
             self.cursor = self.conn.cursor()
+            # Zorg dat de games tabel kolommen heeft voor spelers en winnaar
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS games (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    datum TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    spelers TEXT NOT NULL,
+                    winnaar VARCHAR(255)
+                )
+            """)
+            self.conn.commit()
             return True
         except MySQLError:
             self.conn = None
@@ -165,7 +175,10 @@ class PestenApp(toga.App):
         """)
         self.cursor.execute("""
         CREATE TABLE IF NOT EXISTS games (
-            id INTEGER PRIMARY KEY AUTOINCREMENT
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            datum TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            spelers TEXT NOT NULL,
+            winnaar TEXT
         )
         """)
         self.conn.commit()
@@ -220,12 +233,11 @@ class PestenApp(toga.App):
             self.main_window.info_dialog('Database Fout', 'Geen verbinding met database.')
             return
 
-        # Insert nieuw spel en haal id
+        spelers_str = ",".join(self.selected_players)
         if self.db_type == "sqlite":
-            self.cursor.execute("INSERT INTO games DEFAULT VALUES")
+            self.cursor.execute("INSERT INTO games (spelers) VALUES (?)", (spelers_str,))
         else:
-            self.cursor.execute("INSERT INTO games () VALUES ()")
-
+            self.cursor.execute("INSERT INTO games (spelers) VALUES (%s)", (spelers_str,))
         self.conn.commit()
         self.current_game_id = self.cursor.lastrowid
 
@@ -243,8 +255,13 @@ class PestenApp(toga.App):
             self.main_window.info_dialog('Database Fout', 'Geen verbinding met database.')
             return
 
-        query = "UPDATE scores SET wins = wins + 1 WHERE speler = %s" if self.db_type == "mysql" else "UPDATE scores SET wins = wins + 1 WHERE speler = ?"
-        self.cursor.execute(query, (speler,))
+        if self.db_type == "sqlite":
+            self.cursor.execute("UPDATE scores SET wins = wins + 1 WHERE speler = ?", (speler,))
+            self.cursor.execute("UPDATE games SET winnaar = ? WHERE id = ?", (speler, self.current_game_id))
+        else:
+            self.cursor.execute("UPDATE scores SET wins = wins + 1 WHERE speler = %s", (speler,))
+            self.cursor.execute("UPDATE games SET winnaar = %s WHERE id = %s", (speler, self.current_game_id))
+
         self.conn.commit()
         self.show_scores(None)
 
