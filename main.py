@@ -38,7 +38,6 @@ class PestenApp(toga.App):
                 return
             except Error as err:
                 self.main_window.info_dialog('Database Fout', f'Kon niet verbinden met opgeslagen database-config:\n{err}')
-                # Val terug op handmatige invoer
 
         self.show_db_config_dialog()
 
@@ -192,10 +191,16 @@ class PestenApp(toga.App):
             self.main_window.info_dialog('Database Fout', 'Geen verbinding met database.')
             return
 
-        self.cursor.execute("INSERT INTO games () VALUES ()")
+        # Spelers opslaan als tekst
+        spelers_str = ",".join(self.selected_players)
+        self.cursor.execute(
+            "INSERT INTO games (spelers) VALUES (%s)",
+            (spelers_str,)
+        )
         self.conn.commit()
         self.current_game_id = self.cursor.lastrowid
 
+        # Venster om winnaar te kiezen
         knop_box = toga.Box(style=Pack(direction=COLUMN, padding=10))
         for speler in self.selected_players:
             knop_box.add(toga.Button(speler, on_press=lambda w, s=speler: self.set_winner(s), style=Pack(padding=5)))
@@ -212,7 +217,15 @@ class PestenApp(toga.App):
             self.main_window.info_dialog('Database Fout', 'Geen verbinding met database.')
             return
 
+        # Winnaar in scores verhogen
         self.cursor.execute("UPDATE scores SET wins = wins + 1 WHERE speler = %s", (speler,))
+
+        # Winnaar in games-tabel zetten
+        self.cursor.execute(
+            "UPDATE games SET winnaar = %s WHERE id = %s",
+            (speler, self.current_game_id)
+        )
+
         self.conn.commit()
         self.show_scores(None)
 
