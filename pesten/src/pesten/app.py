@@ -1,16 +1,13 @@
+import os
+import json
 import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
-import mysql.connector
-from mysql.connector import Error
+import pymysql
+import sqlite3
+from pymysql import MySQLError
 
-DB_CONFIG = {
-    'host': '127.0.0.1',
-    'port': 3306,
-    'user': 'root',
-    'password': 'rootpass',
-    'database': 'pesten'
-}
+CONFIG_FILENAME = "db_config.json"
 
 class PestenApp(toga.App):
     def __init__(self):
@@ -19,21 +16,163 @@ class PestenApp(toga.App):
         self.cursor = None
         self.current_game_id = None
         self.selected_players = []
+        self.checkboxes = []
+        self.db_type = None  # "mysql" of "sqlite"
+        self.app_dir = None
+        self.config_path = None
+        self.db_config = {}
 
     def startup(self):
         self.main_window = toga.MainWindow(title=self.formal_name)
+        self.app_dir = self.paths.app
+        os.makedirs(self.app_dir, exist_ok=True)
+        self.config_path = os.path.join(self.app_dir, CONFIG_FILENAME)
 
-        # Probeer DB te verbinden met foutafhandeling
+        # Probeer opgeslagen MySQL config te laden en verbinden
+        if self.load_db_config():
+            if self.try_connect_mysql():
+                self.db_type = "mysql"
+                self.show_main_screen()
+                self.main_window.show()
+                return
+            else:
+                self.main_window.info_dialog('Database Fout', 'Kon niet verbinden met opgeslagen MySQL-config.')
+
+        # Toon keuze scherm (MySQL/SQLite) of MySQL config scherm
+        self.show_db_choice_screen()
+        self.main_window.show()
+
+    def load_db_config(self):
+        if os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, 'r') as f:
+                    self.db_config = json.load(f)
+                return True
+            except Exception:
+                return False
+        return False
+
+    def save_db_config(self):
         try:
-            self._connect_db()
-        except Error as err:
-            self.main_window.info_dialog('Database Fout', f'Kon niet verbinden met database:\n{err}')
-            # Je kunt hier eventueel self.conn en self.cursor op None zetten om fouten te voorkomen
+            with open(self.config_path, 'w') as f:
+                json.dump(self.db_config, f)
+        except Exception as e:
+            self.main_window.info_dialog('Fout bij opslaan', f'Kon databaseconfig niet opslaan:\n{e}')
+
+    def try_connect_mysql(self):
+        try:
+            self.conn = pymysql.connect(**self.db_config)
+            self.cursor = self.conn.cursor()
+            return True
+        except MySQLError:
             self.conn = None
             self.cursor = None
+            return False
 
+    def show_db_choice_screen(self, widget=None):
+        label = toga.Label("Kies database:", style=Pack(padding=10))
+        mysql_button = toga.Button('MySQL / MariaDB', on_press=self.show_mysql_config_screen, style=Pack(padding=5))
+        sqlite_button = toga.Button('SQLite', on_press=self.select_sqlite, style=Pack(padding=5))
+
+        box = toga.Box(children=[label, mysql_button, sqlite_button], style=Pack(direction=COLUMN, padding=20))
+        self.main_window.content = box
+
+    def show_mysql_config_screen(self, widget=None):
+        # Vul standaardvelden uit config indien beschikbaar
+        host = self.db_config.get('host', '127.0.0.1')
+        port = str(self.db_config.get('port', 3306))
+        user = self.db_config.get('user', '')
+        password = self.db_config.get('password', '')
+        database = self.db_config.get('database', '')
+
+        self.host_input = toga.TextInput(value=host, placeholder='Host (bijv. 127.0.0.1)', style=Pack(flex=1))
+        self.port_input = toga.TextInput(value=port, placeholder='Port (bijv. 3306)', style=Pack(flex=1))
+        self.user_input = toga.TextInput(value=user, placeholder='Gebruiker', style=Pack(flex=1))
+        self.password_input = toga.PasswordInput(value=password, placeholder='Wachtwoord', style=Pack(flex=1))
+        self.database_input = toga.TextInput(value=database, placeholder='Database naam', style=Pack(flex=1))
+
+        inputs_box = toga.Box(
+            children=[
+                toga.Label('Host:'), self.host_input,
+                toga.Label('Port:'), self.port_input,
+                toga.Label('Gebruiker:'), self.user_input,
+                toga.Label('Wachtwoord:'), self.password_input,
+                toga.Label('Database:'), self.database_input,
+            ],
+            style=Pack(direction=COLUMN, padding=10, flex=1)
+        )
+
+        submit_button = toga.Button('Verbind met database', on_press=self.on_mysql_config_submit, style=Pack(padding=10))
+        back_button = toga.Button('Terug', on_press=self.show_db_choice_screen, style=Pack(padding=10))
+
+        buttons = toga.Box(children=[submit_button, back_button], style=Pack(direction=ROW, padding=10))
+
+        main_box = toga.Box(children=[inputs_box, buttons], style=Pack(direction=COLUMN, padding=10))
+        self.main_window.content = main_box
+
+    def on_mysql_config_submit(self, widget):
+        host = self.host_input.value.strip()
+        port_str = self.port_input.value.strip()
+        user = self.user_input.value.strip()
+        password = self.password_input.value.strip()
+        database = self.database_input.value.strip()
+
+        if not (host and port_str and user and database):
+            self.main_window.info_dialog('Fout', 'Vul alle velden in behalve wachtwoord.')
+            return
+
+        try:
+            port = int(port_str)
+        except ValueError:
+            self.main_window.info_dialog('Fout', 'Poort moet een getal zijn.')
+            return
+
+        self.db_config = {
+            'host': host,
+            'port': port,
+            'user': user,
+            'password': password,
+            'database': database
+        }
+
+        if not self.try_connect_mysql():
+            self.main_window.info_dialog('Database Fout', 'Kon niet verbinden met MySQL met opgegeven gegevens.')
+            return
+
+        self.save_db_config()
+        self.db_type = "mysql"
+        self.show_main_screen()
+
+    def select_sqlite(self, widget=None):
+        self.db_type = "sqlite"
+        try:
+            self.conn = sqlite3.connect(os.path.join(self.app_dir, 'pesten.sqlite3'))
+            self.cursor = self.conn.cursor()
+            self._setup_sqlite()
+        except sqlite3.Error as err:
+            self.conn = None
+            self.cursor = None
+            self.main_window.info_dialog('Database Fout', f'Kon niet verbinden met SQLite:\n{err}')
+            return
+        self.show_main_screen()
+
+    def _setup_sqlite(self):
+        self.cursor.execute("""
+        CREATE TABLE IF NOT EXISTS scores (
+            speler TEXT PRIMARY KEY,
+            wins INTEGER DEFAULT 0
+        )
+        """)
+        self.cursor.execute("""
+        CREATE TABLE IF NOT EXISTS games (
+            id INTEGER PRIMARY KEY AUTOINCREMENT
+        )
+        """)
+        self.conn.commit()
+
+    def show_main_screen(self, widget=None):
         show_scores_button = toga.Button('Toon scores', on_press=self.show_scores, style=Pack(padding=5))
-        new_game_button = toga.Button('Nieuw spel', on_press=self.start_new_game, style=Pack(padding=5))
+        new_game_button = toga.Button('Nieuw spel', on_press=self.show_new_game_screen, style=Pack(padding=5))
 
         self.scores_label = toga.Label('Scores komen hier...', style=Pack(padding=10))
 
@@ -41,20 +180,9 @@ class PestenApp(toga.App):
         main_box = toga.Box(children=[button_box, self.scores_label], style=Pack(direction=COLUMN, padding=10))
 
         self.main_window.content = main_box
-        self.main_window.show()
+        self.show_scores(None)
 
-    def _connect_db(self):
-        self.conn = mysql.connector.connect(**DB_CONFIG)
-        self.cursor = self.conn.cursor()
-
-    def on_window_close(self, window):
-        print(f"Window '{window.title}' wordt gesloten via kruisje!")
-        if window in self.windows:
-            self.windows.remove(window)
-        window.close()
-        return True
-
-    def start_new_game(self, widget):
+    def show_new_game_screen(self, widget=None):
         if not self.cursor:
             self.main_window.info_dialog('Database Fout', 'Geen verbinding met database.')
             return
@@ -63,37 +191,24 @@ class PestenApp(toga.App):
         spelers = [row[0] for row in self.cursor.fetchall()]
 
         if not spelers:
-            self.main_window.info_dialog('Geen spelers', 'Er zijn nog geen spelers in de database.')
+            self.main_window.info_dialog('Geen spelers', 'Voeg eerst spelers toe in de database.')
             return
 
         select_box = toga.Box(style=Pack(direction=COLUMN, padding=10))
         self.checkboxes = []
         for speler in spelers:
-            cb = toga.Switch(text=speler)
-            cb.value = False
+            cb = toga.Switch(text=speler, value=False)
             self.checkboxes.append(cb)
             select_box.add(cb)
 
         button_row = toga.Box(style=Pack(direction=ROW, padding=5))
-        start_button = toga.Button('Bevestig spelers', on_press=self.confirm_players, style=Pack(padding=5))
-        close_button = toga.Button('Annuleer', on_press=lambda w: self.close_window(select_window), style=Pack(padding=5))
-        button_row.add(start_button)
-        button_row.add(close_button)
+        confirm_button = toga.Button('Bevestig spelers', on_press=self.confirm_players, style=Pack(padding=5))
+        cancel_button = toga.Button('Annuleer', on_press=self.show_main_screen, style=Pack(padding=5))
+        button_row.add(confirm_button)
+        button_row.add(cancel_button)
 
         select_box.add(button_row)
-
-        select_window = toga.Window(title='Selecteer spelers')
-        select_window.content = select_box
-        select_window.on_close = self.on_window_close
-
-        self.windows.add(select_window)
-        select_window.show()
-        self.select_window = select_window
-
-    def close_window(self, window):
-        if window in self.windows:
-            self.windows.remove(window)
-        window.close()
+        self.main_window.content = select_box
 
     def confirm_players(self, widget):
         self.selected_players = [cb.text for cb in self.checkboxes if cb.value]
@@ -101,13 +216,16 @@ class PestenApp(toga.App):
             self.main_window.info_dialog('Geen selectie', 'Selecteer minstens één speler.')
             return
 
-        self.close_window(self.select_window)
-
         if not self.cursor:
             self.main_window.info_dialog('Database Fout', 'Geen verbinding met database.')
             return
 
-        self.cursor.execute("INSERT INTO games () VALUES ()")
+        # Insert nieuw spel en haal id
+        if self.db_type == "sqlite":
+            self.cursor.execute("INSERT INTO games DEFAULT VALUES")
+        else:
+            self.cursor.execute("INSERT INTO games () VALUES ()")
+
         self.conn.commit()
         self.current_game_id = self.cursor.lastrowid
 
@@ -115,23 +233,22 @@ class PestenApp(toga.App):
         for speler in self.selected_players:
             knop_box.add(toga.Button(speler, on_press=lambda w, s=speler: self.set_winner(s), style=Pack(padding=5)))
 
-        win_window = toga.Window(title='Kies winnaar')
-        win_window.content = knop_box
-        win_window.on_close = self.on_window_close
+        back_button = toga.Button('Terug naar scores', on_press=self.show_main_screen, style=Pack(padding=5))
+        knop_box.add(back_button)
 
-        self.windows.add(win_window)
-        win_window.show()
+        self.main_window.content = knop_box
 
     def set_winner(self, speler):
         if not self.cursor:
             self.main_window.info_dialog('Database Fout', 'Geen verbinding met database.')
             return
 
-        self.cursor.execute("UPDATE scores SET wins = wins + 1 WHERE speler = %s", (speler,))
+        query = "UPDATE scores SET wins = wins + 1 WHERE speler = %s" if self.db_type == "mysql" else "UPDATE scores SET wins = wins + 1 WHERE speler = ?"
+        self.cursor.execute(query, (speler,))
         self.conn.commit()
         self.show_scores(None)
 
-    def show_scores(self, widget):
+    def show_scores(self, widget=None):
         if not self.cursor:
             self.scores_label.text = 'Geen database verbinding.'
             return

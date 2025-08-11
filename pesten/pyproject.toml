@@ -21,6 +21,7 @@ test_sources = [
 ]
 
 requires = [
+    "pymysql",
 ]
 test_requires = [
     "pytest",
