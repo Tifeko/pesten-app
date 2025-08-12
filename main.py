@@ -236,13 +236,25 @@ class PestenApp(toga.App):
             self.scores_label.text = 'Geen database verbinding.'
             return
 
+        # Haal spelers en win-aantallen op
         self.cursor.execute("SELECT speler, wins FROM scores ORDER BY wins DESC")
-        rows = self.cursor.fetchall()
-        if rows:
-            score_text = '\n'.join([f"{speler}: {wins}" for speler, wins in rows])
-        else:
-            score_text = 'Nog geen scores.'
-        self.scores_label.text = score_text
+        score_rows = self.cursor.fetchall()
+
+        if not score_rows:
+            self.scores_label.text = 'Nog geen scores.'
+            return
+
+        score_texts = []
+        for speler, wins in score_rows:
+            # Tel hoeveel potjes de speler heeft gespeeld
+            self.cursor.execute(
+                "SELECT COUNT(*) FROM games WHERE FIND_IN_SET(%s, spelers)",
+                (speler,)
+            )
+            games_played = self.cursor.fetchone()[0]
+            score_texts.append(f"{speler}: {wins} / {games_played}")
+
+        self.scores_label.text = "\n".join(score_texts)
 
     async def export_games_csv(self, widget):
         if not self.cursor:
