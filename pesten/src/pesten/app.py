@@ -292,7 +292,13 @@ class PestenApp(toga.App):
                     (speler,)
                 )
             games_played = self.cursor.fetchone()[0]
-            score_texts.append(f"{speler}: {wins} / {games_played}")
+
+
+            if not wins == 0 or not games_played == 0:
+                percentage = (wins / games_played) * 100
+            else:
+                percentage = 0.00000
+            score_texts.append(f"{speler}: {wins} / {games_played} - {percentage:.1f}%")
 
         self.scores_label.text = "\n".join(score_texts)
 
