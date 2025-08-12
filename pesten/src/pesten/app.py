@@ -270,13 +270,31 @@ class PestenApp(toga.App):
             self.scores_label.text = 'Geen database verbinding.'
             return
 
+        # Haal spelers en wins op
         self.cursor.execute("SELECT speler, wins FROM scores ORDER BY wins DESC")
         rows = self.cursor.fetchall()
-        if rows:
-            score_text = '\n'.join([f"{speler}: {wins}" for speler, wins in rows])
-        else:
-            score_text = 'Nog geen scores.'
-        self.scores_label.text = score_text
+
+        if not rows:
+            self.scores_label.text = 'Nog geen scores.'
+            return
+
+        score_texts = []
+        for speler, wins in rows:
+            # Tel hoeveel potjes de speler heeft gespeeld
+            if self.db_type == "sqlite":
+                self.cursor.execute(
+                    "SELECT COUNT(*) FROM games WHERE instr(spelers, ?) > 0",
+                    (speler,)
+                )
+            else:
+                self.cursor.execute(
+                    "SELECT COUNT(*) FROM games WHERE FIND_IN_SET(%s, spelers)",
+                    (speler,)
+                )
+            games_played = self.cursor.fetchone()[0]
+            score_texts.append(f"{speler}: {wins} keer gewonnen / {games_played} potjes gespeeld")
+
+        self.scores_label.text = "\n".join(score_texts)
 
     def on_exit(self):
         if self.cursor:
