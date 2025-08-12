@@ -264,6 +264,7 @@ class PestenApp(toga.App):
 
         self.conn.commit()
         self.show_scores(None)
+        self.show_main_screen()
 
     def show_scores(self, widget=None):
         if not self.cursor:

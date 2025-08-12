@@ -20,27 +20,36 @@ class PestenApp(toga.App):
         self.open_windows = set()
         self.db_config = {}
         self.config_path = None
-        self.app_dir = None  # Wordt ingesteld in startup
+        self.app_dir = None
 
     def startup(self):
         self.main_window = toga.MainWindow(title=self.formal_name)
         
-        # Stel app_dir in via toga's paths
         self.app_dir = self.paths.app
         os.makedirs(self.app_dir, exist_ok=True)
-
         self.config_path = os.path.join(self.app_dir, CONFIG_FILENAME)
 
         if self.load_db_config():
             try:
                 self.conn = mysql.connector.connect(**self.db_config)
                 self.cursor = self.conn.cursor()
+                self.ensure_starter_column()
                 self.load_main_menu()
                 return
             except Error as err:
                 self.main_window.info_dialog('Database Fout', f'Kon niet verbinden met opgeslagen database-config:\n{err}')
 
         self.show_db_config_dialog()
+
+    def ensure_starter_column(self):
+        try:
+            self.cursor.execute("SHOW COLUMNS FROM games LIKE 'starter'")
+            result = self.cursor.fetchone()
+            if not result:
+                self.cursor.execute("ALTER TABLE games ADD COLUMN starter VARCHAR(255)")
+                self.conn.commit()
+        except Error as err:
+            self.main_window.info_dialog('Database Fout', f'Kon kolom starter niet controleren/toevoegen:\n{err}')
 
     def load_db_config(self):
         if os.path.exists(self.config_path):
@@ -86,7 +95,6 @@ class PestenApp(toga.App):
         )
 
         submit_button = toga.Button('Verbind met database', on_press=self.on_db_config_submit, style=Pack(padding=10))
-
         main_box = toga.Box(children=[inputs_box, submit_button], style=Pack(direction=COLUMN, padding=10))
 
         self.main_window.content = main_box
@@ -120,6 +128,7 @@ class PestenApp(toga.App):
         try:
             self.conn = mysql.connector.connect(**self.db_config)
             self.cursor = self.conn.cursor()
+            self.ensure_starter_column()
         except Error as err:
             self.main_window.info_dialog('Database Fout', f'Kon niet verbinden:\n{err}')
             return
@@ -133,7 +142,6 @@ class PestenApp(toga.App):
         export_csv_button = toga.Button('Exporteer spellen (CSV)', on_press=self.export_games_csv, style=Pack(padding=5))
 
         self.scores_label = toga.Label('Scores komen hier...', style=Pack(padding=10))
-
         button_box = toga.Box(children=[show_scores_button, new_game_button, export_csv_button], style=Pack(direction=ROW, padding=5))
         main_box = toga.Box(children=[button_box, self.scores_label], style=Pack(direction=COLUMN, padding=10))
 
@@ -193,16 +201,29 @@ class PestenApp(toga.App):
             self.main_window.info_dialog('Database Fout', 'Geen verbinding met database.')
             return
 
-        # Spelers opslaan als tekst
         spelers_str = ",".join(self.selected_players)
-        self.cursor.execute(
-            "INSERT INTO games (spelers) VALUES (%s)",
-            (spelers_str,)
-        )
+        self.cursor.execute("INSERT INTO games (spelers) VALUES (%s)", (spelers_str,))
         self.conn.commit()
         self.current_game_id = self.cursor.lastrowid
 
-        # Venster om winnaar te kiezen
+        # Vraag wie begint
+        begin_box = toga.Box(style=Pack(direction=COLUMN, padding=10))
+        for speler in self.selected_players:
+            begin_box.add(toga.Button(speler, on_press=lambda w, s=speler: self.set_starter(s), style=Pack(padding=5)))
+
+        self.begin_window = toga.Window(title='Wie begint?')
+        self.begin_window.content = begin_box
+        self.begin_window.on_close = self.on_window_close
+        self.open_windows.add(self.begin_window)
+        self.begin_window.show()
+
+    def set_starter(self, starter):
+        self.cursor.execute("UPDATE games SET starter = %s WHERE id = %s", (starter, self.current_game_id))
+        self.conn.commit()
+        self.close_window(self.begin_window)
+        self.show_winner_selection()
+
+    def show_winner_selection(self):
         knop_box = toga.Box(style=Pack(direction=COLUMN, padding=10))
         for speler in self.selected_players:
             knop_box.add(toga.Button(speler, on_press=lambda w, s=speler: self.set_winner(s), style=Pack(padding=5)))
@@ -210,7 +231,6 @@ class PestenApp(toga.App):
         win_window = toga.Window(title='Kies winnaar')
         win_window.content = knop_box
         win_window.on_close = self.on_window_close
-
         self.open_windows.add(win_window)
         win_window.show()
 
@@ -219,15 +239,8 @@ class PestenApp(toga.App):
             self.main_window.info_dialog('Database Fout', 'Geen verbinding met database.')
             return
 
-        # Winnaar in scores verhogen
         self.cursor.execute("UPDATE scores SET wins = wins + 1 WHERE speler = %s", (speler,))
-
-        # Winnaar in games-tabel zetten
-        self.cursor.execute(
-            "UPDATE games SET winnaar = %s WHERE id = %s",
-            (speler, self.current_game_id)
-        )
-
+        self.cursor.execute("UPDATE games SET winnaar = %s WHERE id = %s", (speler, self.current_game_id))
         self.conn.commit()
         self.show_scores(None)
 
@@ -236,7 +249,6 @@ class PestenApp(toga.App):
             self.scores_label.text = 'Geen database verbinding.'
             return
 
-        # Haal spelers en win-aantallen op
         self.cursor.execute("SELECT speler, wins FROM scores ORDER BY wins DESC")
         score_rows = self.cursor.fetchall()
 
@@ -246,17 +258,13 @@ class PestenApp(toga.App):
 
         score_texts = []
         for speler, wins in score_rows:
-            # Tel hoeveel potjes de speler heeft gespeeld
-            self.cursor.execute(
-                "SELECT COUNT(*) FROM games WHERE FIND_IN_SET(%s, spelers)",
-                (speler,)
-            )
+            self.cursor.execute("SELECT COUNT(*) FROM games WHERE FIND_IN_SET(%s, spelers)", (speler,))
             games_played = self.cursor.fetchone()[0]
 
             if not wins == 0 or not games_played == 0:
                 percentage = (wins / games_played) * 100
             else:
-                percentage = 0.00000
+                percentage = 0.0
             score_texts.append(f"{speler}: {wins} / {games_played} - {percentage:.1f}%")
 
         self.scores_label.text = "\n".join(score_texts)
@@ -266,7 +274,7 @@ class PestenApp(toga.App):
             self.main_window.info_dialog('Fout', 'Geen databaseverbinding.')
             return
 
-        self.cursor.execute("SELECT id, spelers, winnaar FROM games ORDER BY id")
+        self.cursor.execute("SELECT id, spelers, winnaar, starter FROM games ORDER BY id")
         rows = self.cursor.fetchall()
 
         if not rows:
@@ -280,17 +288,15 @@ class PestenApp(toga.App):
         )
 
         if not file_path:
-            return  # gebruiker annuleerde
+            return
 
-        # Zorg dat we absoluut pad gebruiken
         file_path = os.path.abspath(file_path)
-
         try:
             with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile)
-                writer.writerow(['Spel ID', 'Spelers', 'Winnaar'])
-                for spel_id, spelers, winnaar in rows:
-                    writer.writerow([spel_id, spelers, winnaar if winnaar else ''])
+                writer.writerow(['Spel ID', 'Spelers', 'Winnaar', 'Starter'])
+                for spel_id, spelers, winnaar, starter in rows:
+                    writer.writerow([spel_id, spelers, winnaar if winnaar else '', starter if starter else ''])
             self.main_window.info_dialog('Succes', f'Spellen succesvol opgeslagen in {file_path}')
         except Exception as e:
             self.main_window.info_dialog('Fout', f'Kon CSV niet opslaan:\n{e}')
