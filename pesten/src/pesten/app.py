@@ -292,7 +292,7 @@ class PestenApp(toga.App):
                     (speler,)
                 )
             games_played = self.cursor.fetchone()[0]
-            score_texts.append(f"{speler}: {wins} keer gewonnen / {games_played} potjes gespeeld")
+            score_texts.append(f"{speler}: {wins} / {games_played}")
 
         self.scores_label.text = "\n".join(score_texts)
 
