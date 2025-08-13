@@ -2,7 +2,7 @@
 [tool.briefcase]
 project_name = "Pesten"
 bundle = "me.tifeko"
-version = "0.0.1"
+version = "3.0.1"
 url = "https://tifeko.me/pesten"
 license.file = "LICENSE"
 author = "Tifeko"
