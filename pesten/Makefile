@@ -1,13 +1,12 @@
-all: flatpak
+all: test_android
+
+test_android:
+	briefcase build android
 
 android:
-	rm -r build/pesten/android
-	briefcase build android
+	briefcase dist android
 
 debian:
 	rm -r build/pesten/debian
 	briefcase build linux debian
 
-flatpak:
-	rm -r build/pesten/linux/flatpak
-	briefcase build linux flatpak
