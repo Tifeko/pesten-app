@@ -289,7 +289,7 @@ class PestenApp(toga.App):
             self.cursor.execute("SELECT COUNT(*) FROM games WHERE FIND_IN_SET(%s, spelers)", (speler,))
             games_played = self.cursor.fetchone()[0]
 
-            if not wins == 0 and games_played == 0:
+            if not wins == 0 and not games_played == 0:
                 percentage = (wins / games_played) * 100
             else:
                 percentage = 0.0
