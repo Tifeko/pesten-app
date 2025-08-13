@@ -33,7 +33,7 @@ class PestenApp(toga.App):
             try:
                 self.conn = mysql.connector.connect(**self.db_config)
                 self.cursor = self.conn.cursor()
-                self.ensure_starter_column()
+                self.ensure_columns()
                 self.load_main_menu()
                 return
             except Error as err:
@@ -41,15 +41,24 @@ class PestenApp(toga.App):
 
         self.show_db_config_dialog()
 
-    def ensure_starter_column(self):
+    def ensure_columns(self):
         try:
+            # Starter-kolom
             self.cursor.execute("SHOW COLUMNS FROM games LIKE 'starter'")
             result = self.cursor.fetchone()
             if not result:
                 self.cursor.execute("ALTER TABLE games ADD COLUMN starter VARCHAR(255)")
                 self.conn.commit()
+
+            # Stapel_geschud-kolom
+            self.cursor.execute("SHOW COLUMNS FROM games LIKE 'stapel_geschud'")
+            result = self.cursor.fetchone()
+            if not result:
+                self.cursor.execute("ALTER TABLE games ADD COLUMN stapel_geschud TINYINT(1) DEFAULT 0")
+                self.conn.commit()
+
         except Error as err:
-            self.main_window.info_dialog('Database Fout', f'Kon kolom starter niet controleren/toevoegen:\n{err}')
+            self.main_window.info_dialog('Database Fout', f'Kon kolommen niet controleren/toevoegen:\n{err}')
 
     def load_db_config(self):
         if os.path.exists(self.config_path):
@@ -128,7 +137,7 @@ class PestenApp(toga.App):
         try:
             self.conn = mysql.connector.connect(**self.db_config)
             self.cursor = self.conn.cursor()
-            self.ensure_starter_column()
+            self.ensure_columns()
         except Error as err:
             self.main_window.info_dialog('Database Fout', f'Kon niet verbinden:\n{err}')
             return
@@ -228,11 +237,30 @@ class PestenApp(toga.App):
         for speler in self.selected_players:
             knop_box.add(toga.Button(speler, on_press=lambda w, s=speler: self.set_winner(s), style=Pack(padding=5)))
 
+        # Knop voor stapel schudden
+        knop_box.add(toga.Button(
+            "Stapel geschud",
+            on_press=self.shuffle_deck,
+            style=Pack(padding=5)
+        ))
+
         win_window = toga.Window(title='Kies winnaar')
         win_window.content = knop_box
         win_window.on_close = self.on_window_close
         self.open_windows.add(win_window)
         win_window.show()
+
+    def shuffle_deck(self, widget):
+        if not self.cursor:
+            self.main_window.info_dialog('Database Fout', 'Geen verbinding met database.')
+            return
+
+        try:
+            self.cursor.execute("UPDATE games SET stapel_geschud = 1 WHERE id = %s", (self.current_game_id,))
+            self.conn.commit()
+            self.main_window.info_dialog("Actie", "De stapel is gemarkeerd als geschud!")
+        except Error as err:
+            self.main_window.info_dialog("Database Fout", f"Kon stapelstatus niet opslaan:\n{err}")
 
     def set_winner(self, speler):
         if not self.cursor:
@@ -261,7 +289,7 @@ class PestenApp(toga.App):
             self.cursor.execute("SELECT COUNT(*) FROM games WHERE FIND_IN_SET(%s, spelers)", (speler,))
             games_played = self.cursor.fetchone()[0]
 
-            if not wins == 0 or not games_played == 0:
+            if not wins == 0 and games_played == 0:
                 percentage = (wins / games_played) * 100
             else:
                 percentage = 0.0
@@ -274,7 +302,7 @@ class PestenApp(toga.App):
             self.main_window.info_dialog('Fout', 'Geen databaseverbinding.')
             return
 
-        self.cursor.execute("SELECT id, spelers, winnaar, starter FROM games ORDER BY id")
+        self.cursor.execute("SELECT id, spelers, winnaar, starter, stapel_geschud FROM games ORDER BY id")
         rows = self.cursor.fetchall()
 
         if not rows:
@@ -294,9 +322,15 @@ class PestenApp(toga.App):
         try:
             with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile)
-                writer.writerow(['Spel ID', 'Spelers', 'Winnaar', 'Starter'])
-                for spel_id, spelers, winnaar, starter in rows:
-                    writer.writerow([spel_id, spelers, winnaar if winnaar else '', starter if starter else ''])
+                writer.writerow(['Spel ID', 'Spelers', 'Winnaar', 'Starter', 'Stapel Geschud'])
+                for spel_id, spelers, winnaar, starter, stapel_geschud in rows:
+                    writer.writerow([
+                        spel_id,
+                        spelers,
+                        winnaar if winnaar else '',
+                        starter if starter else '',
+                        stapel_geschud
+                    ])
             self.main_window.info_dialog('Succes', f'Spellen succesvol opgeslagen in {file_path}')
         except Exception as e:
             self.main_window.info_dialog('Fout', f'Kon CSV niet opslaan:\n{e}')
