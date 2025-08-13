@@ -31,6 +31,7 @@ class PestenApp(toga.App):
         if self.load_db_config():
             if self.try_connect_mysql():
                 self.db_type = "mysql"
+                self.ensure_columns()
                 self.show_main_screen()
                 self.main_window.show()
                 return
@@ -62,6 +63,12 @@ class PestenApp(toga.App):
             self.conn = pymysql.connect(**self.db_config)
             self.cursor = self.conn.cursor()
             self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS scores (
+                    speler VARCHAR(255) PRIMARY KEY,
+                    wins INT DEFAULT 0
+                )
+            """)
+            self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS games (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     datum TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -91,8 +98,8 @@ class PestenApp(toga.App):
         password = self.db_config.get('password', '')
         database = self.db_config.get('database', '')
 
-        self.host_input = toga.TextInput(value=host, placeholder='Host (bijv. 127.0.0.1)', style=Pack(flex=1))
-        self.port_input = toga.TextInput(value=port, placeholder='Port (bijv. 3306)', style=Pack(flex=1))
+        self.host_input = toga.TextInput(value=host, placeholder='Host', style=Pack(flex=1))
+        self.port_input = toga.TextInput(value=port, placeholder='Port', style=Pack(flex=1))
         self.user_input = toga.TextInput(value=user, placeholder='Gebruiker', style=Pack(flex=1))
         self.password_input = toga.PasswordInput(value=password, placeholder='Wachtwoord', style=Pack(flex=1))
         self.database_input = toga.TextInput(value=database, placeholder='Database naam', style=Pack(flex=1))
@@ -110,10 +117,9 @@ class PestenApp(toga.App):
 
         submit_button = toga.Button('Verbind met database', on_press=self.on_mysql_config_submit, style=Pack(padding=10))
         back_button = toga.Button('Terug', on_press=self.show_db_choice_screen, style=Pack(padding=10))
-
         buttons = toga.Box(children=[submit_button, back_button], style=Pack(direction=ROW, padding=10))
-        main_box = toga.Box(children=[inputs_box, buttons], style=Pack(direction=COLUMN, padding=10))
-        self.main_window.content = main_box
+
+        self.main_window.content = toga.Box(children=[inputs_box, buttons], style=Pack(direction=COLUMN, padding=10))
 
     def on_mysql_config_submit(self, widget):
         host = self.host_input.value.strip()
@@ -146,6 +152,7 @@ class PestenApp(toga.App):
 
         self.save_db_config()
         self.db_type = "mysql"
+        self.ensure_columns()
         self.show_main_screen()
 
     def select_sqlite(self, widget=None):
@@ -154,6 +161,7 @@ class PestenApp(toga.App):
             self.conn = sqlite3.connect(os.path.join(self.app_dir, 'pesten.sqlite3'))
             self.cursor = self.conn.cursor()
             self._setup_sqlite()
+            self.ensure_columns()
         except sqlite3.Error as err:
             self.conn = None
             self.cursor = None
@@ -177,6 +185,26 @@ class PestenApp(toga.App):
         )
         """)
         self.conn.commit()
+
+    def ensure_columns(self):
+        try:
+            if self.db_type == "sqlite":
+                self.cursor.execute("PRAGMA table_info(games)")
+                columns = [row[1] for row in self.cursor.fetchall()]
+                if "starter" not in columns:
+                    self.cursor.execute("ALTER TABLE games ADD COLUMN starter TEXT")
+                if "stapel_geschud" not in columns:
+                    self.cursor.execute("ALTER TABLE games ADD COLUMN stapel_geschud INTEGER DEFAULT 0")
+            else:
+                self.cursor.execute("SHOW COLUMNS FROM games LIKE 'starter'")
+                if not self.cursor.fetchone():
+                    self.cursor.execute("ALTER TABLE games ADD COLUMN starter VARCHAR(255)")
+                self.cursor.execute("SHOW COLUMNS FROM games LIKE 'stapel_geschud'")
+                if not self.cursor.fetchone():
+                    self.cursor.execute("ALTER TABLE games ADD COLUMN stapel_geschud TINYINT(1) DEFAULT 0")
+            self.conn.commit()
+        except Exception as e:
+            self.main_window.info_dialog('Database Fout', f'Kon kolommen niet controleren/toevoegen:\n{e}')
 
     def show_main_screen(self, widget=None):
         show_scores_button = toga.Button('Toon scores', on_press=self.show_scores, style=Pack(padding=5))
@@ -211,7 +239,6 @@ class PestenApp(toga.App):
         cancel_button = toga.Button('Annuleer', on_press=self.show_main_screen, style=Pack(padding=5))
         button_row.add(confirm_button)
         button_row.add(cancel_button)
-
         select_box.add(button_row)
         self.main_window.content = select_box
 
@@ -236,38 +263,29 @@ class PestenApp(toga.App):
         self.main_window.content = begin_box
 
     def set_starter(self, starter):
-        # Voeg starter kolom toe indien nodig
-        try:
-            if self.db_type == "sqlite":
-                self.cursor.execute("PRAGMA table_info(games)")
-                columns = [row[1] for row in self.cursor.fetchall()]
-                if "starter" not in columns:
-                    self.cursor.execute("ALTER TABLE games ADD COLUMN starter TEXT")
-            else:
-                self.cursor.execute("SHOW COLUMNS FROM games LIKE 'starter'")
-                if not self.cursor.fetchone():
-                    self.cursor.execute("ALTER TABLE games ADD COLUMN starter VARCHAR(255)")
-            self.conn.commit()
-        except Exception as e:
-            self.main_window.info_dialog('Fout', f'Kon kolom starter niet toevoegen:\n{e}')
-            return
-
-        # Opslaan wie begint
         if self.db_type == "sqlite":
             self.cursor.execute("UPDATE games SET starter = ? WHERE id = ?", (starter, self.current_game_id))
         else:
             self.cursor.execute("UPDATE games SET starter = %s WHERE id = %s", (starter, self.current_game_id))
         self.conn.commit()
-
         self.show_winner_selection()
 
     def show_winner_selection(self):
         knop_box = toga.Box(style=Pack(direction=COLUMN, padding=10))
         for speler in self.selected_players:
             knop_box.add(toga.Button(speler, on_press=lambda w, s=speler: self.set_winner(s), style=Pack(padding=5)))
+        knop_box.add(toga.Button("Stapel geschud", on_press=self.shuffle_deck, style=Pack(padding=5)))
         back_button = toga.Button('Terug naar scores', on_press=self.show_main_screen, style=Pack(padding=5))
         knop_box.add(back_button)
         self.main_window.content = knop_box
+
+    def shuffle_deck(self, widget):
+        if self.db_type == "sqlite":
+            self.cursor.execute("UPDATE games SET stapel_geschud = staped_geschud + 1 WHERE id = ?", (self.current_game_id,))
+        else:
+            self.cursor.execute("UPDATE games SET stapel_geschud = stapel_geschud + 1 WHERE id = %s", (self.current_game_id,))
+        self.conn.commit()
+        self.main_window.info_dialog("Actie", "De stapel is gemarkeerd als geschud!")
 
     def set_winner(self, speler):
         if self.db_type == "sqlite":

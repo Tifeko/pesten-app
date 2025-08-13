@@ -256,7 +256,7 @@ class PestenApp(toga.App):
             return
 
         try:
-            self.cursor.execute("UPDATE games SET stapel_geschud = 1 WHERE id = %s", (self.current_game_id,))
+            self.cursor.execute("UPDATE games SET stapel_geschud = stapel_geschud + 1 WHERE id = %s", (self.current_game_id,))
             self.conn.commit()
             self.main_window.info_dialog("Actie", "De stapel is gemarkeerd als geschud!")
         except Error as err:
